@@ -95,5 +95,9 @@ ENV/
 .DS_Store
 .idea/
 cookie_storage/*
-
+!cookie_storage/.gitkeep
+!downloads/.gitkeep
+logs/*
+!logs/.gitkeep
 .envrc
+
