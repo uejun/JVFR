@@ -21,60 +21,15 @@ from selenium.common.exceptions import StaleElementReferenceException
 from PIL import ImageGrab, Image
 import pickle
 
+from dynamo import DynamoClient
+from jins_entity import GlassProduct
+
 
 JINS_COOKIE_PATH = "cookie_storage/cookies.pkl"
 JINS_BASE_URL = "https://www.jins.com/jp/"
 
 JINS_DETAIL_PATH_TEMPLATE = "https://www.jins.com/jp/Products/Detail/number/{product_id}/{color_no}/?from_search=1"
 
-
-class GlassProduct:
-
-    def __init__(self, product_id: str):
-        self.product_id: str = product_id
-        self.color_list: list[str] = []
-
-    def add_color(self, color_id: str):
-        self.color_list.append(color_id)
-
-    def create_detail_page_href(self, color_id):
-        return "https://www.jins.com/jp/Products/Detail/number/" + self.product_id + "/" + color_id + "/?from_search=1"
-
-
-class DynamoClient:
-
-    def __init__(self):
-        self.dynamodb = boto3.resource('dynamodb', region_name='ap-northeast-1')
-        self.table = self.dynamodb.Table("jvfr_glass")
-        self.color_table = self.dynamodb.Table("jvfr_color")
-        if self.table == None:
-            raise Exception("table is None.")
-
-
-    def put_product(self, product: GlassProduct, page_num: int):
-        response = self.table.put_item(
-            Item={
-                'ProductID': product.product_id,
-                'PageNum': page_num,
-                'Colors': product.color_list
-            }
-        )
-
-    def put_products(self, products, page_num: int):
-        for product in products:
-            self.put_product(product, page_num)
-
-    def get_products(self):
-        res = self.table.scan(Limit=2)
-        return res["Items"]
-
-    def put_color(self, color_id, color_name):
-        response = self.color_table.put_item(
-            Item={
-                'color_id': color_id,
-                'color_name': color_name
-            }
-        )
 
 def create_logger() -> logging.Logger:
     logger = logging.getLogger("JVFR")
@@ -131,6 +86,8 @@ def create_jins_db(driver: ChromeDriver):
         time.sleep(3)
 
 
+def load_save_dir_filenames(save_dir: str):
+    pass
 
 #認証ページへ行く. faceNoは自動入力. facePasswordはこのコードで自動入力する. その後10秒間待機するので、その間に人力で画像キャプチャ認証を行う.
 def auth_through(driver: ChromeDriver, url: str):
@@ -152,10 +109,30 @@ def auth_through(driver: ChromeDriver, url: str):
     save_cookies(driver)
 
 
+def get_canvas(driver: ChromeDriver):
+    try_count = 0
+    canvas = None
+    while True:
+        try:
+            canvas: WebElement = WebDriverWait(driver, 60).until(find_canvas)
+            if not canvas:
+                if try_count > 5:
+                    break
+                try_count += 1
+                continue
+            else:
+                break
+        except Exception as e:
+            if try_count > 5:
+                break
+            try_count += 1
+
+    return canvas
+
 # 商品ページからバーチャルメガネ画像を保存する
 def save_virtual_fit_image(driver: ChromeDriver, logger: Logger, product_id, color_no, save_dir):
     try:
-        canvas: WebElement = WebDriverWait(driver, 60).until(find_canvas)
+        canvas: WebElement = get_canvas(driver)
         offset_x = canvas.size['width'] / 12
         for i in range(-6, 7, 1):
             if i == 0:
@@ -234,165 +211,13 @@ def scrapy_items(driver: ChromeDriver, logger: Logger, items: list, save_dir: st
 
 AUTH_URL = "https://www.jins-jp.com/VirtualFit/Auth?fn=b13c066b4b0229b2c8c74f3d29afc18d81ea6b7435c630af5a59f81154dddc8f"
 
-def scrape_glass_images_directly(driver: ChromeDriver, logger: Logger, save_dir: str, is_virtualfit: bool):
+def scrape_glass_images_directly(driver: ChromeDriver, logger: Logger, save_dir: str, is_virtualfit: bool, auth_url):
     if is_virtualfit:
         auth_through(driver, AUTH_URL)
     dynamo_client = DynamoClient()
     items = dynamo_client.get_products()
     scrapy_items(driver, logger, items, save_dir, dynamo_client, is_virtualfit)
 
-
-def access(driver: ChromeDriver, logger: Logger, is_virtualfit: bool, is_auth: bool, start_page=0, start_idx=0):
-
-    dir_name = "/Users/uejun/Desktop/downloads/"
-
-    if is_virtualfit:
-        # 認証あり
-        if is_auth:
-            url = "https://www.jins-jp.com/VirtualFit/Auth?fn=b13c066b4b0229b2c8c74f3d29afc18d81ea6b7435c630af5a59f81154dddc8f"
-            driver.get(url)
-            driver.maximize_window()
-            # driver.find_element_by_id("faceNo").send_keys("928227719")
-            driver.find_element_by_id("facePassword").send_keys("olab1")
-
-            # この間に画像認証をやる
-            time.sleep(10)
-
-            # 認証ボタンクリック
-            auth_span = driver.find_element_by_id(
-                "auth_wrapper").find_element_by_xpath('.//span[text()="認証"]')
-            auth_span.find_element_by_xpath("../..").click()
-
-            # cookieを保存
-            save_cookies(driver)
-
-        else:
-            # 認証なし
-            url = "https://www.jins.com/jp/"
-            driver.get(url)
-            driver.maximize_window()
-            load_cookies(driver)
-
-    else:
-        url = "https://www.jins.com/jp/"
-        driver.get(url)
-        driver.maximize_window()
-
-
-
-    # 商品一覧ページのスタートのページナンバー
-    page = start_page
-    saved_count: int = 0
-    while True:
-        logger.info('page:%s', page)
-        driver.get(
-            f'https://www.jins.com/jp/Search/All/1/?jcas=1#/Search/json?category=1&keyword=&page={page}&sort=3&angle=shomen')
-
-        time.sleep(3)
-
-        # 商品一覧を取得
-        # products_per_page: List[webdriver.remote.webelement.WebElement] = driver.find_element_by_id(
-        #     "asyncSearchResultView").find_elements_by_class_name('asyncProductWrapper')
-
-        products_per_page: list[WebElement] = WebDriverWait(driver, 60).until(find_product_list)
-        num_per_page = len(products_per_page)
-
-        logger.info('product_counts:%s', num_per_page)
-        print('商品数' + str(num_per_page))
-
-        if num_per_page < 1:
-            break
-
-        hrefs: list[str] = []
-        product_ids: list[str] = []
-        products: list[GlassProduct] = []
-        for product_elem in products_per_page:
-            link: WebElement = product_elem.find_element_by_class_name(
-                "asyncProductImage").find_element_by_tag_name('a')
-            href = link.get_attribute("href")
-
-            # 品番の取得
-            product_id = href.split('/')[-3]
-            print(product_id)
-            product_ids.append(product_id)
-            hrefs.append(link.get_attribute("href"))
-
-            # GlassProductの生成
-            glass_product = GlassProduct(product_id)
-
-            # カラーIDの取得・追加
-            colors_clearfix: WebElement = product_elem.find_element_by_class_name('colors')
-            color_list: list[WebElement] =  colors_clearfix.find_elements_by_tag_name("li")
-            for celem in color_list:
-
-                color_id = celem.get_attribute("color")
-                print(color_id)
-                glass_product.add_color(color_id)
-
-            # GlassProductのリスト追加
-            products.append(glass_product)
-
-        current_num_in_current_page: int = start_idx
-        while current_num_in_current_page < len(products_per_page):
-            product_elem = products[current_num_in_current_page]
-            logger.info('{%s}/{%s}/page%s', current_num_in_current_page, num_per_page, page)
-
-            for color_id in product_elem.color_list:
-                href = product_elem.create_detail_page_href(color_id)
-                driver.get(href)
-
-                # バーチャルフィットチェックボタンクリック
-                if is_virtualfit:
-                    vf_checkbox = driver.find_element_by_id("vtoCheck")
-                    if not vf_checkbox.is_selected():
-                        driver.find_element_by_id("vtoCheckLabel").click()
-                        time.sleep(5)
-
-                color_name = driver.find_element_by_id('dtlColor').text
-
-                if is_virtualfit:
-                    try:
-                        canvas: WebElement = WebDriverWait(driver, 60).until(find_canvas)
-                        offset_x = canvas.size['width'] / 12
-                        for i in range(-6, 7, 1):
-                            if i == 0:
-                                webdriver.ActionChains(driver).context_click(canvas).perform()
-                            else:
-                                bias = - signed(i) * (offset_x / 2)
-                                webdriver.ActionChains(driver).move_to_element(canvas).move_by_offset(
-                                    offset_x * i + bias, 0).click().context_click().perform()
-
-                            product_color_name = product_elem.product_id + "-" + color_id + "_" + str(i+6)
-                            filename = dir_name + product_color_name + ".png"
-
-                            save_context_clicked_image(filename, is_virtualfit)
-                            saved_count += 1
-
-                            logger.info('name:%s', product_color_name)
-                            print(product_color_name)
-                            logger.info('current_count:%s', saved_count)
-                    except StaleElementReferenceException as e:
-                        logger.error(e)
-                else:
-                    # img_src: str = driver.find_element_by_id("product_main_image_inner").find_element_by_tag_name("img").get_attribute('src')
-                    img = driver.find_element_by_id(
-                        "product_main_image_inner").find_element_by_tag_name("img")
-                    webdriver.ActionChains(driver).context_click(img).perform()
-
-                    product_color_name = product_elem.product_id + "-" + color_id + "_glass"
-                    filename = dir_name + product_color_name + ".png"
-
-                    save_context_clicked_image(filename, is_virtualfit)
-                    saved_count += 1
-
-                    logger.info('name:%s', product_color_name)
-                    print(product_color_name)
-                    logger.info('current_count:%s', saved_count)
-
-
-
-            current_num_in_current_page += 1
-        page += 1
 
 
 def find_product_list(driver: ChromeDriver):
@@ -500,34 +325,39 @@ def check_exists_canvas(driver: ChromeDriver):
         return False
     return True
 
-# @click.command()
-# @click.option('--page', type=int, default=1)
-# @click.option('--idx', type=int, default=1)
-def do(page, idx):
-    logger = create_logger()
-    driver = create_driver()
-    access(driver, logger, is_virtualfit=False, is_auth=False, start_page=page, start_idx=idx)
+
 
 @click.group()
 def cmd():
     pass
 
 @cmd.command()
-def create_db():
+def create_db(prefix):
     print("create_db")
+    print(prefix)
     driver = create_driver()
     create_jins_db(driver)
 
+
 @cmd.command()
-def crawl_save():
+@click.option('--virtual/--no-virtual', default=True, help="Virtual Fit or Not")
+@click.option('--auth_url', default='hello', help="Auth URL.")
+@click.option('--save_dir', default='hello', help='Save dir name')
+def scrape(virtual, auth_url, save_dir):
+    if virtual and auth_url == 'hello':
+        print('Please specify --auth_url if virtual.')
+        return
+    if save_dir == 'hello':
+        print('Please specify --save_dir.')
+        return
+
     driver = create_driver()
     logger = create_logger()
-    save_dir = "/Users/uejun/Desktop/dev"
-    scrape_glass_images_directly(driver, logger, save_dir, is_virtualfit=False)
-    print("crawl_save")
+    scrape_glass_images_directly(driver, logger,
+                                 save_dir=save_dir,
+                                 is_virtualfit=virtual,
+                                 auth_url=auth_url)
 
-def main():
-    cmd()
 
 if __name__ == '__main__':
-    main()
+    cmd()
