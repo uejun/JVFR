@@ -13,9 +13,9 @@ class FileChecker:
         for filename in filenames:
             object_name = filename.split('/')[-1]
             id_and_color = object_name.split('_')[0:2]
-            print(id_and_color)
-            self.exist_glasses.append((id_and_color))
+            glass_name = "_".join(id_and_color)
+            self.exist_glasses.append(glass_name)
 
-
-def isExist():
-    pass
+    def isExist(self, product_id, color_no):
+        glass_name = "_".join([product_id, color_no])
+        return glass_name in self.exist_glasses
