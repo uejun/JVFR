@@ -33,7 +33,8 @@ JINS_DETAIL_PATH_TEMPLATE = "https://www.jins.com/jp/Products/Detail/number/{pro
 
 
 class JinsScraper:
-    def __init__(self, save_dir: str, is_virtual: bool=True, auth_url:str=""):
+    def __init__(self, save_dir: str, log_dir: str, is_virtual: bool=True, auth_url:str=""):
+        self.log_dir = log_dir
         self.logger: Logger = self.create_logger()
         self.driver: ChromeDriver = self.create_driver()
         self.save_dir = save_dir
@@ -44,7 +45,9 @@ class JinsScraper:
 
     def create_logger(self) -> logging.Logger:
         logger = logging.getLogger("JVFR")
-        fh = logging.FileHandler('/Users/uejun/Desktop/logs/jins.log', 'a+')
+        if self.log_dir[-1] != '/':
+            self.log_dir += '/'
+        fh = logging.FileHandler(self.log_dir + 'jins.log', 'a+')
         formatter = logging.Formatter('[%(asctime)s] %(message)s')
         fh.setFormatter(formatter)
         logger.addHandler(fh)
@@ -350,14 +353,19 @@ def create_db(prefix):
 @click.option('--virtual/--no-virtual', default=True, help="Virtual Fit or Not")
 @click.option('--auth_url', default='hello', help="Auth URL.")
 @click.option('--save_dir', default='hello', help='Save dir name')
-def scrape(virtual, auth_url, save_dir):
+@click.option('--log_dir', default='hello', help='Log dir name')
+def scrape(virtual, auth_url, save_dir, log_dir):
     if virtual and auth_url == 'hello':
         print('Please specify --auth_url if virtual.')
         return
     if save_dir == 'hello':
         print('Please specify --save_dir.')
+    if log_dir == 'hello':
+        print('Please specify --log_dir.')
 
-    scraper = JinsScraper(save_dir=save_dir,
+    scraper = JinsScraper(
+                save_dir=save_dir,
+                log_dir=log_dir,
                 is_virtual=virtual,
                 auth_url=auth_url)
     scraper.scrape_items()
